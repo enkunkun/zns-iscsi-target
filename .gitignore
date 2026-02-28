@@ -1,6 +1,6 @@
 # Go binaries
 bin/
-zns-iscsi
+/zns-iscsi
 *.exe
 
 # Node
