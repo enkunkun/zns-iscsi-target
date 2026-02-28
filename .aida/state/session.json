@@ -1,0 +1,27 @@
+{
+  "session_id": "aida-zns-iscsi-20260228-135900",
+  "started_at": "2026-02-28T13:59:00+09:00",
+  "updated_at": "2026-02-28T19:25:00+09:00",
+  "resumed_at": "2026-02-28T14:30:00+09:00",
+  "resume_count": 1,
+  "mode": "aida",
+  "current_phase": "COMPLETED",
+  "phase": 7,
+  "phase_name": "completed",
+  "user_request": "ZNS/SMR iSCSI Target - Zoned Storage to Conventional Block Device Translation Layer",
+  "project_name": "zns-iscsi-target",
+  "leaders": {
+    "spec": "completed",
+    "impl": "completed"
+  },
+  "active_agents": [],
+  "completed_tasks": [
+    "spec-requirements", "spec-design", "spec-tasks",
+    "impl-backend", "impl-frontend", "impl-docker",
+    "gate-1-backend-build", "gate-2-backend-tests",
+    "gate-3-frontend-build", "gate-4-frontend-tests",
+    "gate-5-race-detector"
+  ],
+  "pending_tasks": [],
+  "quality_gates_passed": true
+}

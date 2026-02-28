@@ -1,0 +1,24 @@
+# Go binaries
+bin/
+zns-iscsi
+*.exe
+
+# Node
+web/node_modules/
+web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Test
+coverage.out
+coverage.html
+/tmp/
+
+# Journal data
+*.wal

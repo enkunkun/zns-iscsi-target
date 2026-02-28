@@ -1,0 +1,8 @@
+.git
+.jj
+.aida
+.claude
+node_modules
+web/node_modules
+bin/
+*.test

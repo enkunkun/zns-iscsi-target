@@ -1,0 +1,87 @@
+# ZNS/SMR iSCSI Target configuration example
+# Copy this file to config.yaml and adjust values to match your environment.
+
+# iSCSI target settings
+target:
+  # iSCSI Qualified Name (IQN) for this target.
+  # Must be unique within your storage network.
+  iqn: "iqn.2026-02.io.zns:target0"
+
+  # TCP address and port for the iSCSI portal (default port is 3260).
+  portal: "0.0.0.0:3260"
+
+  # Maximum number of concurrent iSCSI sessions.
+  max_sessions: 4
+
+  # CHAP authentication (optional)
+  auth:
+    enabled: false
+    # chap_user: "initiator-username"
+    # chap_secret: "initiator-secret-min-12-chars"
+
+# Device backend settings
+device:
+  # Backend type: "emulator" (in-memory) or "smr" (physical SMR/ZNS drive, Linux only).
+  backend: emulator
+
+  # Path to the SMR/ZNS block device. Required only when backend is "smr".
+  # path: /dev/sdb
+
+  # In-memory emulator settings (used when backend is "emulator").
+  emulator:
+    # Number of zones to emulate.
+    zone_count: 64
+
+    # Size of each zone in megabytes.
+    zone_size_mb: 256
+
+    # Maximum number of simultaneously open zones.
+    max_open_zones: 14
+
+# Zone Translation Layer (ZTL) settings
+ztl:
+  # Logical segment size in kilobytes.
+  # This is the unit of L2P mapping granularity.
+  segment_size_kb: 8
+
+  # Write buffer size in megabytes. Writes are coalesced before being flushed
+  # to the zoned device to ensure sequential write ordering.
+  buffer_size_mb: 512
+
+  # Maximum age (in seconds) before a dirty buffer is force-flushed.
+  buffer_flush_age_sec: 5
+
+  # GC is triggered when free zones drop below this fraction of total zones.
+  # Must be between 0 and 1 (exclusive).
+  gc_trigger_free_ratio: 0.20
+
+  # Number of free zones below which emergency GC runs synchronously before writes.
+  gc_emergency_free_zones: 3
+
+# Write-ahead journal (WAL) settings
+journal:
+  # Path to the WAL file. The directory must exist (or will be created).
+  path: /var/lib/zns-iscsi/journal.wal
+
+  # Interval (in seconds) between automatic L2P checkpoints written to the journal.
+  checkpoint_interval_sec: 60
+
+  # Interval (in milliseconds) for the background group-commit flush loop.
+  # Lower values reduce data loss on crash at the cost of more I/O.
+  sync_period_ms: 10
+
+  # Maximum WAL file size in megabytes before truncation/rotation.
+  max_size_mb: 1024
+
+# REST API and metrics settings
+api:
+  # TCP address for the HTTP API and Prometheus metrics endpoint.
+  listen: "0.0.0.0:8080"
+
+# Logging settings
+log:
+  # Log level: "debug", "info", "warn", or "error".
+  level: info
+
+  # Log format: "json" or "text".
+  format: json

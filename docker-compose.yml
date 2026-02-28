@@ -1,0 +1,15 @@
+services:
+  target:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3260:3260"
+      - "8080:8080"
+    volumes:
+      - ./config.yaml.example:/etc/zns-iscsi/config.yaml:ro
+      - journal_data:/var/lib/zns-iscsi
+    restart: unless-stopped
+
+volumes:
+  journal_data:

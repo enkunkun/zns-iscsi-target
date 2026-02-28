@@ -1,0 +1,32 @@
+{
+  "task_id": "spec-zns-iscsi-target",
+  "status": "completed",
+  "completed_at": "2026-02-28T14:20:00+09:00",
+  "outputs": {
+    "requirements": ".aida/specs/zns-iscsi-target-requirements.md",
+    "design": ".aida/specs/zns-iscsi-target-design.md",
+    "tasks": ".aida/specs/zns-iscsi-target-tasks.md"
+  },
+  "artifacts": {
+    "extraction": ".aida/artifacts/requirements/extraction.md",
+    "structure": ".aida/artifacts/designs/structure.md",
+    "alignment": ".aida/artifacts/alignment.md"
+  },
+  "summary": "Specification phases 1-4 complete. Requirements cover 49 functional requirements across iSCSI (REQ-ISCSI-01..08), SCSI (REQ-SCSI-01..05), ZTL (REQ-ZTL-01..08), GC (REQ-GC-01..08), Backend (REQ-BACKEND-01..05), WAL (REQ-WAL-01..06), API (REQ-API-01..04), UI (REQ-UI-01..05), and Configuration (REQ-CFG-01..04). Design covers full architecture with ASCII diagrams, L2P table design (8KB segment granularity, ~4GB RAM for 4TB device), GC algorithm with CAS-based race-free migration, SG_IO ZBC binary protocol, WAL record format, and Docker multi-stage build. Implementation tasks broken into 50 tasks across 11 phases (A-K) with a prioritized first vertical slice.",
+  "phases_completed": {
+    "phase1_extraction": "completed",
+    "phase2_structure": "completed",
+    "phase3_alignment": "completed",
+    "phase4_verification": "completed"
+  },
+  "key_decisions": [
+    "L2P granularity: 8KB segments (configurable) for ~4GB RAM on 4TB device",
+    "L2P concurrent access: atomic.Uint64 + CAS, no mutex on hot path",
+    "GC migration race: CAS-based conflict detection, foreground write wins",
+    "WAL group commit: configurable 10ms batch window for performance",
+    "SMR backend: pure Go SG_IO ioctl via syscall.Syscall6, no CGO",
+    "Build tags: //go:build linux for SMR package",
+    "UNMAP: implement as L2P invalidation (no physical zero-write)",
+    "Zone write pointer: always reconciled from device via ReportZones after crash recovery"
+  ]
+}
