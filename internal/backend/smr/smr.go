@@ -2,6 +2,7 @@ package smr
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -32,8 +33,69 @@ func newSMRBackend(transport ScsiTransport) (*SMRBackend, error) {
 	return s, nil
 }
 
+// verifyDevice checks that the device is a Host-Managed zoned block device.
+// It uses Standard INQUIRY to check the Peripheral Device Type and, if needed,
+// VPD page 0xB1 to confirm the zoned model.
+func (s *SMRBackend) verifyDevice() error {
+	const inquiryLen = 96
+
+	// Step 1: Standard INQUIRY
+	inqBuf := make([]byte, inquiryLen)
+	inqCDB := buildInquiryCDB(inquiryLen)
+	if err := s.transport.ScsiRead(inqCDB, inqBuf, defaultTimeout); err != nil {
+		return fmt.Errorf("INQUIRY: %w", err)
+	}
+
+	pdt, err := parseInquiryBasic(inqBuf)
+	if err != nil {
+		return fmt.Errorf("parse INQUIRY: %w", err)
+	}
+
+	// Step 2: Check Peripheral Device Type
+	switch pdt {
+	case zbc.PeripheralDeviceTypeZBC:
+		// 0x14 — Host-Managed Zoned Block Device confirmed
+		return nil
+	case 0x00:
+		// Standard disk — need VPD to check zoned model
+	default:
+		return fmt.Errorf("unsupported device type 0x%02x: not a zoned block device", pdt)
+	}
+
+	// Step 3: VPD page 0xB1 (Block Device Characteristics)
+	const vpdLen = 64
+	vpdBuf := make([]byte, vpdLen)
+	vpdCDB := buildInquiryVPDCDB(zbc.VPDPageBlockDeviceChar, vpdLen)
+	if err := s.transport.ScsiRead(vpdCDB, vpdBuf, defaultTimeout); err != nil {
+		return fmt.Errorf("INQUIRY VPD 0xB1: %w", err)
+	}
+
+	zoned, err := parseVPDB1Zoned(vpdBuf)
+	if err != nil {
+		return fmt.Errorf("parse VPD B1: %w", err)
+	}
+
+	switch zoned {
+	case 0x02:
+		// Host-Managed confirmed via VPD
+		return nil
+	case 0x01:
+		// Host-Aware — warn but allow
+		slog.Warn("device reports Host-Aware zoning; sequential write constraints are advisory, not mandatory")
+		return nil
+	case 0x00:
+		return fmt.Errorf("device is not a zoned block device (VPD B1 zoned=0)")
+	default:
+		return fmt.Errorf("unsupported zoned model 0x%02x in VPD B1", zoned)
+	}
+}
+
 // discover queries the device for zone information.
 func (s *SMRBackend) discover() error {
+	if err := s.verifyDevice(); err != nil {
+		return fmt.Errorf("device verification failed: %w", err)
+	}
+
 	zones, err := s.reportZones(0, 1)
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)

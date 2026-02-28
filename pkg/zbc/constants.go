@@ -37,5 +37,19 @@ const ZoneDescriptorSize = 64
 // ReportZonesHeaderSize is the size of the REPORT ZONES response header in bytes.
 const ReportZonesHeaderSize = 64
 
+// SCSI INQUIRY constants.
+const (
+	// OpcodeInquiry is the SCSI INQUIRY command opcode.
+	OpcodeInquiry = 0x12
+
+	// PeripheralDeviceTypeZBC is the Peripheral Device Type for
+	// Host-Managed Zoned Block Devices (ZBC).
+	PeripheralDeviceTypeZBC uint8 = 0x14
+
+	// VPDPageBlockDeviceChar is the VPD page code for
+	// Block Device Characteristics (SBC-4).
+	VPDPageBlockDeviceChar uint8 = 0xB1
+)
+
 // SectorSize is the standard sector size for ZBC/ZAC devices.
 const SectorSize = 512

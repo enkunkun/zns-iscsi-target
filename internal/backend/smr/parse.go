@@ -7,6 +7,28 @@ import (
 	"github.com/enkunkun/zns-iscsi-target/pkg/zbc"
 )
 
+// parseInquiryBasic extracts the Peripheral Device Type from a Standard INQUIRY response.
+// The PDT occupies the lower 5 bits of byte 0.
+func parseInquiryBasic(buf []byte) (uint8, error) {
+	if len(buf) < 5 {
+		return 0, fmt.Errorf("INQUIRY response too short: %d < 5", len(buf))
+	}
+	pdt := buf[0] & 0x1F
+	return pdt, nil
+}
+
+// parseVPDB1Zoned extracts the Zoned field from a VPD page 0xB1
+// (Block Device Characteristics) response.
+// The Zoned field is bits 5:4 of byte 8.
+// Returns: 0=non-zoned, 1=Host-Aware, 2=Host-Managed, 3=reserved.
+func parseVPDB1Zoned(buf []byte) (uint8, error) {
+	if len(buf) < 9 {
+		return 0, fmt.Errorf("VPD B1 response too short: %d < 9", len(buf))
+	}
+	zoned := (buf[8] >> 4) & 0x03
+	return zoned, nil
+}
+
 // parseZoneDescriptor parses a 64-byte zone descriptor from the REPORT ZONES response.
 func parseZoneDescriptor(data []byte) (zbc.ZoneDescriptor, error) {
 	if len(data) < zbc.ZoneDescriptorSize {

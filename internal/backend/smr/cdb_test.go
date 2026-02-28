@@ -29,6 +29,26 @@ func TestBuildZoneActionCDB(t *testing.T) {
 	assert.Equal(t, byte(0x01), cdb2[14])
 }
 
+func TestBuildInquiryCDB(t *testing.T) {
+	cdb := buildInquiryCDB(96)
+	assert.Len(t, cdb, 6)
+	assert.Equal(t, byte(zbc.OpcodeInquiry), cdb[0])
+	assert.Equal(t, byte(0x00), cdb[1]) // EVPD=0
+	assert.Equal(t, byte(0x00), cdb[2]) // Page Code unused
+	assert.Equal(t, uint16(96), binary.BigEndian.Uint16(cdb[3:5]))
+	assert.Equal(t, byte(0x00), cdb[5]) // Control
+}
+
+func TestBuildInquiryVPDCDB(t *testing.T) {
+	cdb := buildInquiryVPDCDB(zbc.VPDPageBlockDeviceChar, 64)
+	assert.Len(t, cdb, 6)
+	assert.Equal(t, byte(zbc.OpcodeInquiry), cdb[0])
+	assert.Equal(t, byte(0x01), cdb[1])                    // EVPD=1
+	assert.Equal(t, zbc.VPDPageBlockDeviceChar, cdb[2])     // Page Code
+	assert.Equal(t, uint16(64), binary.BigEndian.Uint16(cdb[3:5]))
+	assert.Equal(t, byte(0x00), cdb[5]) // Control
+}
+
 func TestBuildRead16CDB(t *testing.T) {
 	cdb := buildRead16CDB(0x100, 8)
 	assert.Equal(t, byte(0x88), cdb[0])

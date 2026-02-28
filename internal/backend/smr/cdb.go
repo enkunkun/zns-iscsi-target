@@ -40,6 +40,28 @@ func buildZoneActionCDB(action uint8, startLBA uint64, all bool) []byte {
 	return cdb
 }
 
+// buildInquiryCDB builds a Standard INQUIRY CDB (6 bytes, EVPD=0).
+func buildInquiryCDB(allocLen uint16) []byte {
+	cdb := make([]byte, 6)
+	cdb[0] = zbc.OpcodeInquiry
+	// cdb[1] = 0x00 — EVPD=0
+	// cdb[2] = 0x00 — Page Code (unused when EVPD=0)
+	binary.BigEndian.PutUint16(cdb[3:5], allocLen)
+	// cdb[5] = 0x00 — Control
+	return cdb
+}
+
+// buildInquiryVPDCDB builds a VPD INQUIRY CDB (6 bytes, EVPD=1).
+func buildInquiryVPDCDB(pageCode uint8, allocLen uint16) []byte {
+	cdb := make([]byte, 6)
+	cdb[0] = zbc.OpcodeInquiry
+	cdb[1] = 0x01 // EVPD=1
+	cdb[2] = pageCode
+	binary.BigEndian.PutUint16(cdb[3:5], allocLen)
+	// cdb[5] = 0x00 — Control
+	return cdb
+}
+
 // buildRead16CDB builds a SCSI READ(16) CDB.
 func buildRead16CDB(lba uint64, count uint32) []byte {
 	cdb := make([]byte, 16)

@@ -9,6 +9,77 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseInquiryBasic(t *testing.T) {
+	tests := []struct {
+		name    string
+		buf     []byte
+		wantPDT uint8
+		wantErr bool
+	}{
+		{
+			name:    "Host-Managed ZBC (0x14)",
+			buf:     append([]byte{0x14}, make([]byte, 95)...),
+			wantPDT: 0x14,
+		},
+		{
+			name:    "Standard disk (0x00)",
+			buf:     make([]byte, 96),
+			wantPDT: 0x00,
+		},
+		{
+			name:    "PDT with qualifier bits set",
+			buf:     append([]byte{0x60 | 0x14}, make([]byte, 95)...), // qualifier=3, PDT=0x14
+			wantPDT: 0x14,
+		},
+		{
+			name:    "too short",
+			buf:     make([]byte, 4),
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pdt, err := parseInquiryBasic(tt.buf)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantPDT, pdt)
+		})
+	}
+}
+
+func TestParseVPDB1Zoned(t *testing.T) {
+	tests := []struct {
+		name       string
+		byte8      byte
+		wantZoned  uint8
+		wantErr    bool
+	}{
+		{"non-zoned", 0x00, 0x00, false},
+		{"Host-Aware", 0x10, 0x01, false},  // bits 5:4 = 01
+		{"Host-Managed", 0x20, 0x02, false}, // bits 5:4 = 10
+		{"reserved", 0x30, 0x03, false},     // bits 5:4 = 11
+		{"Host-Managed with other bits set", 0xAF, 0x02, false}, // bits 5:4 = 10, others set
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := make([]byte, 64)
+			buf[8] = tt.byte8
+			zoned, err := parseVPDB1Zoned(buf)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantZoned, zoned)
+		})
+	}
+
+	// Too short
+	t.Run("too short", func(t *testing.T) {
+		_, err := parseVPDB1Zoned(make([]byte, 8))
+		assert.Error(t, err)
+	})
+}
+
 // buildZoneDescriptorFixture builds a known 64-byte zone descriptor binary.
 func buildZoneDescriptorFixture(zoneType zbc.ZoneType, condition zbc.ZoneCondition,
 	zoneLen, startLBA, writePointer uint64, reset, nonSeq bool) []byte {

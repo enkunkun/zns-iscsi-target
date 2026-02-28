@@ -1,98 +1,110 @@
-# Windows SPTI 対応 - ZNS/SMR iSCSI Target
+# SMR デバイス検証 — 非 SMR デバイス誤指定の防止
 
 ## Context
 
-現在の SMR バックエンドは Linux SG_IO ioctl 専用。Linux でしか実 SMR HDD にアクセスできないため、「Linux で動かすなら既存ツール（btrfs + targetcli）で十分」という問題がある。Windows SPTI（SCSI Pass-Through Interface）対応を追加し、Windows 上で直接 SMR HDD を使えるようにする。Docker（Linux コンテナ）はそのまま残す。
+`smr.Open()` に非 SMR デバイスのパスを渡した場合、現状は REPORT ZONES の SCSI エラーで暗黙的に失敗するだけ。Host-Aware SMR（Sequential Write Preferred）が渡された場合は Open が成功してしまい、ZTL の前提（Host-Managed = 厳密な順序制約）と矛盾する動作になる危険がある。
+
+`discover()` の先頭に SCSI INQUIRY + VPD ページによる明示的なデバイス種別チェックを追加し、非 SMR / 非 Host-Managed デバイスを早期に弾く。
 
 ## 方針
 
-SCSI CDB（コマンドバイト列）はOS非依存。SG_IO と SPTI で異なるのは「CDB をデバイスに送る方法」だけ。`ScsiTransport` インターフェースを導入し、Linux/Windows で実装を差し替える。
+SCSI 仕様で定義された2段階の検証を行う:
 
-## 変更概要
+1. **Standard INQUIRY** — Peripheral Device Type が `0x14`（Host-Managed Zoned Block Device）であることを確認
+2. **VPD Page 0xB1**（Block Device Characteristics）— Zoned フィールドが `0x01`（Host-Managed）であることを確認
 
-### Phase 1: Tidy — CDB/パース処理をOS非依存に抽出（振る舞い変更なし）
+どちらか一方だけでも十分だが、古いファームウェアで VPD 0xB1 未対応のケースや、Peripheral Device Type が `0x00`（通常ブロックデバイス）のまま VPD で Host-Managed を返すケースの両方をカバーするため、フォールバック付きの2段階にする。
 
-1. `internal/backend/smr/zbc.go` から CDB ビルダー関数を `cdb.go`（build tag なし）に移動
-   - `buildReportZonesCDB`, `buildZoneActionCDB`, `buildRead16CDB`, `buildWrite16CDB`
-2. `internal/backend/smr/zbc.go` からバイナリパース関数を `parse.go`（build tag なし）に移動
-   - `parseZoneDescriptor`, 新規 `parseReportZonesResponse`
-3. `zbc_test.go` の `//go:build linux` タグを削除 → `cdb_test.go` + `parse_test.go` に分割
-4. `ScsiTransport` インターフェース定義 → `scsi_transport.go`（build tag なし）
-   ```go
-   type ScsiTransport interface {
-       ScsiRead(cdb []byte, buf []byte, timeoutMs uint32) error
-       ScsiWrite(cdb []byte, buf []byte, timeoutMs uint32) error
-       ScsiNoData(cdb []byte, timeoutMs uint32) error
-       Close() error
-   }
-   ```
-5. 既存 SG_IO を `linuxTransport` にラップ → `transport_linux.go`（`//go:build linux`）
-6. `smr.go` を `fd int` から `ScsiTransport` に変更、build tag 削除。`Open()` を `smr_linux.go` に移動
+### 判定ロジック
 
-### Phase 2: Windows SPTI トランスポート追加
+```
+1. Standard INQUIRY を送信
+2. Peripheral Device Type をチェック:
+   - 0x14 → Host-Managed 確定 → OK
+   - 0x00 → 通常ブロックデバイスとして報告されている → VPD で追加確認
+   - その他 → エラー（SMR ドライブではない）
+3. VPD 0xB1 を送信（PDT=0x00 の場合のみ）
+4. Zoned フィールド（byte 8, bits 5:4）をチェック:
+   - 0b01 → Host-Aware（警告ログ出力、許可するがログで注意喚起）
+   - 0b10 → Host-Managed → OK（VPD で正しく報告）
+   - 0b00 → 非ゾーンデバイス → エラー
+   - 0b11 → 予約値 → エラー
+```
 
-7. `spti.go`（`//go:build windows`）— SPTI 構造体定義
-   - `scsiPassThroughDirect` 構造体（Windows C 構造体と同じレイアウト）
-   - `IOCTL_SCSI_PASS_THROUGH_DIRECT = 0x4D014`
-8. `transport_windows.go`（`//go:build windows`）— `windowsTransport` 実装
-   - `windows.CreateFile` で `\\.\PhysicalDriveN` を開く
-   - `windows.DeviceIoControl` で SPTI 実行
-   - エラーに「run as Administrator」ヒントを含める
-9. `smr_windows.go`（`//go:build windows`）— `Open()` 関数
+## 変更ファイル
 
-### Phase 3: cmd/ とコンフィグの修正
+| ファイル | 操作 | 内容 |
+|---------|------|------|
+| `internal/backend/smr/cdb.go` | 変更 | `buildInquiryCDB`, `buildInquiryVPDCDB` 追加 |
+| `internal/backend/smr/parse.go` | 変更 | `parseInquiryBasic`, `parseVPDB1Zoned` 追加 |
+| `internal/backend/smr/smr.go` | 変更 | `discover()` 先頭に `verifyDevice()` 呼び出し追加 |
+| `internal/backend/smr/cdb_test.go` | 変更 | INQUIRY CDB ビルダーのテスト追加 |
+| `internal/backend/smr/parse_test.go` | 変更 | INQUIRY / VPD パーサーのテスト追加 |
+| `internal/backend/smr/mock_transport_test.go` | 変更 | mock に INQUIRY 応答追加、検証テスト追加 |
+| `pkg/zbc/constants.go` | 変更 | `OpcodeInquiry`, `PeripheralDeviceTypeZBC`, `VPDPageBlockDevChar` 定数追加 |
 
-10. `cmd/zns-iscsi/smr_windows.go`（`//go:build windows`）— `openSMRBackend` 追加
-11. `cmd/zns-iscsi/smr_other.go` — build tag を `!linux && !windows` に変更
-12. シグナル処理のクロスプラットフォーム化
-    - `signal_unix.go`（`//go:build !windows`）: `SIGTERM + SIGINT`
-    - `signal_windows.go`（`//go:build windows`）: `os.Interrupt`
-    - `main.go` から `syscall` import 削除、`notifySignals(sigCh)` に変更
-13. `config.yaml.example` に Windows パス例（`\\.\PhysicalDrive1`）追加
-14. Makefile に `build-windows` ターゲット追加
+## 詳細設計
 
-### Phase 4: テスト
+### 1. `pkg/zbc/constants.go` に追加する定数
 
-15. `mock_transport_test.go`（build tag なし）— SMRBackend のモックテスト
-16. `spti_test.go`（`//go:build windows`）— 構造体サイズ検証
+```go
+OpcodeInquiry                    = 0x12
+PeripheralDeviceTypeZBC   uint8  = 0x14  // Host-Managed Zoned Block Device
+VPDPageBlockDeviceChar    uint8  = 0xB1  // Block Device Characteristics
+```
 
-## ファイル変更一覧
+### 2. `cdb.go` に追加する CDB ビルダー
 
-| ファイル | 操作 | build tag |
-|---------|------|-----------|
-| `internal/backend/smr/cdb.go` | 新規（zbc.go から抽出） | なし |
-| `internal/backend/smr/parse.go` | 新規（zbc.go から抽出） | なし |
-| `internal/backend/smr/scsi_transport.go` | 新規 | なし |
-| `internal/backend/smr/transport_linux.go` | 新規（sgioctl.go ラッパー） | linux |
-| `internal/backend/smr/transport_windows.go` | 新規 | windows |
-| `internal/backend/smr/spti.go` | 新規 | windows |
-| `internal/backend/smr/smr.go` | 変更: fd→ScsiTransport | なし（tag削除） |
-| `internal/backend/smr/smr_linux.go` | 新規: Open() | linux |
-| `internal/backend/smr/smr_windows.go` | 新規: Open() | windows |
-| `internal/backend/smr/zbc.go` | 変更: CDB/parse移動後の残り | linux |
-| `internal/backend/smr/cdb_test.go` | リネーム（tag削除） | なし |
-| `internal/backend/smr/parse_test.go` | 新規 | なし |
-| `internal/backend/smr/mock_transport_test.go` | 新規 | なし |
-| `internal/backend/smr/spti_test.go` | 新規 | windows |
-| `cmd/zns-iscsi/smr_windows.go` | 新規 | windows |
-| `cmd/zns-iscsi/smr_other.go` | 変更: tag | !linux && !windows |
-| `cmd/zns-iscsi/signal_unix.go` | 新規 | !windows |
-| `cmd/zns-iscsi/signal_windows.go` | 新規 | windows |
-| `cmd/zns-iscsi/main.go` | 変更: signal | なし |
-| `config.yaml.example` | 変更: Windows例追加 | — |
-| `Makefile` | 変更: build-windows追加 | — |
+```go
+// buildInquiryCDB — Standard INQUIRY (EVPD=0)
+func buildInquiryCDB(allocLen uint16) []byte  // 6-byte CDB
+
+// buildInquiryVPDCDB — VPD INQUIRY (EVPD=1, page code)
+func buildInquiryVPDCDB(pageCode uint8, allocLen uint16) []byte  // 6-byte CDB
+```
+
+INQUIRY CDB は 6 バイト（既存の 16 バイト CDB と異なる）:
+- `[0]` = 0x12 (opcode)
+- `[1]` = EVPD bit (0 or 1)
+- `[2]` = Page Code (EVPD=1 の場合のみ)
+- `[3:5]` = Allocation Length (big-endian 16-bit)
+- `[5]` = Control (0x00)
+
+### 3. `parse.go` に追加するパーサー
+
+```go
+// parseInquiryBasic — Standard INQUIRY レスポンスから PDT を抽出
+func parseInquiryBasic(buf []byte) (peripheralDeviceType uint8, err error)
+
+// parseVPDB1Zoned — VPD B1 レスポンスから Zoned フィールドを抽出
+// 戻り値: 0=非ゾーン, 1=Host-Aware, 2=Host-Managed, 3=予約
+func parseVPDB1Zoned(buf []byte) (uint8, error)
+```
+
+### 4. `smr.go` の `verifyDevice()` メソッド
+
+```go
+func (s *SMRBackend) verifyDevice() error {
+    // 1. Standard INQUIRY
+    // 2. PDT チェック (0x14 → OK, 0x00 → VPD 確認, other → error)
+    // 3. VPD 0xB1 チェック (Host-Managed → OK, Host-Aware → warn+OK, other → error)
+}
+```
+
+`discover()` の先頭で `s.verifyDevice()` を呼び出す。
+
+### 5. Host-Aware の扱い
+
+Host-Aware デバイスは REPORT ZONES が成功し、ゾーン管理も動作する。ただし書き込み順序制約が「推奨」であり「必須」ではないため、ZTL が想定する「Sequential Write Required」と微妙に異なる。完全にブロックするのではなく、`slog.Warn` でログ出力して続行する（ユーザーが意図的に使うケースを許容）。
 
 ## 検証方法
 
 ```bash
-# macOS/Linux: 既存テストが壊れていないこと
-go build ./...
-go test ./...
+# テストが通ること
+go test ./internal/backend/smr/... -v
 go test -race ./...
 
-# Windows クロスコンパイル
+# ビルド確認
+go build ./...
 GOOS=windows GOARCH=amd64 go build ./cmd/zns-iscsi
-
-# フロントエンド（変更なし）
-cd web && npm run build && npx vitest run
 ```

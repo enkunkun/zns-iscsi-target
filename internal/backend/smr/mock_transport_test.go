@@ -15,6 +15,10 @@ import (
 type mockTransport struct {
 	zones  []zbc.ZoneDescriptor
 	closed bool
+	// pdt is the Peripheral Device Type returned by INQUIRY (default: 0x14).
+	pdt uint8
+	// zonedModel is the VPD B1 zoned field (0=non-zoned, 1=Host-Aware, 2=Host-Managed).
+	zonedModel uint8
 	// scsiReadFn allows tests to override ScsiRead behavior.
 	scsiReadFn func(cdb []byte, buf []byte) error
 	// scsiWriteFn allows tests to override ScsiWrite behavior.
@@ -24,7 +28,11 @@ type mockTransport struct {
 }
 
 func newMockTransport(zones []zbc.ZoneDescriptor) *mockTransport {
-	m := &mockTransport{zones: zones}
+	m := &mockTransport{
+		zones:      zones,
+		pdt:        zbc.PeripheralDeviceTypeZBC, // default: Host-Managed
+		zonedModel: 0x02,                        // default: Host-Managed
+	}
 	m.scsiReadFn = m.defaultScsiRead
 	return m
 }
@@ -59,6 +67,8 @@ func (m *mockTransport) defaultScsiRead(cdb []byte, buf []byte) error {
 	}
 
 	switch cdb[0] {
+	case zbc.OpcodeInquiry:
+		return m.handleInquiry(cdb, buf)
 	case zbc.OpcodeReportZones:
 		return m.handleReportZones(cdb, buf)
 	case 0x88: // READ(16)
@@ -70,6 +80,26 @@ func (m *mockTransport) defaultScsiRead(cdb []byte, buf []byte) error {
 	default:
 		return nil
 	}
+}
+
+// handleInquiry builds a mock INQUIRY response.
+func (m *mockTransport) handleInquiry(cdb []byte, buf []byte) error {
+	evpd := cdb[1] & 0x01
+	if evpd == 0 {
+		// Standard INQUIRY — set PDT in byte 0
+		if len(buf) > 0 {
+			buf[0] = m.pdt
+		}
+		return nil
+	}
+	// VPD INQUIRY
+	pageCode := cdb[2]
+	if pageCode == zbc.VPDPageBlockDeviceChar {
+		if len(buf) > 8 {
+			buf[8] = m.zonedModel << 4
+		}
+	}
+	return nil
 }
 
 // handleReportZones builds a mock REPORT ZONES response.
@@ -249,11 +279,74 @@ func TestSMRBackendClose(t *testing.T) {
 	assert.True(t, transport.closed)
 }
 
+func TestVerifyDeviceHostManaged(t *testing.T) {
+	zones := makeTestZones(2, 524288)
+	transport := newMockTransport(zones)
+	// PDT=0x14 → Host-Managed, should succeed
+	_, err := newSMRBackend(transport)
+	require.NoError(t, err)
+}
+
+func TestVerifyDeviceVPDHostManaged(t *testing.T) {
+	zones := makeTestZones(2, 524288)
+	transport := newMockTransport(zones)
+	transport.pdt = 0x00        // standard disk
+	transport.zonedModel = 0x02 // VPD says Host-Managed
+	_, err := newSMRBackend(transport)
+	require.NoError(t, err)
+}
+
+func TestVerifyDeviceHostAwareWarns(t *testing.T) {
+	zones := makeTestZones(2, 524288)
+	transport := newMockTransport(zones)
+	transport.pdt = 0x00        // standard disk
+	transport.zonedModel = 0x01 // Host-Aware
+	// Should succeed (with warning logged)
+	_, err := newSMRBackend(transport)
+	require.NoError(t, err)
+}
+
+func TestVerifyDeviceNonZoned(t *testing.T) {
+	zones := makeTestZones(2, 524288)
+	transport := newMockTransport(zones)
+	transport.pdt = 0x00        // standard disk
+	transport.zonedModel = 0x00 // non-zoned
+	_, err := newSMRBackend(transport)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not a zoned block device")
+	assert.True(t, transport.closed)
+}
+
+func TestVerifyDeviceUnsupportedPDT(t *testing.T) {
+	zones := makeTestZones(2, 524288)
+	transport := newMockTransport(zones)
+	transport.pdt = 0x05 // CD/DVD
+	_, err := newSMRBackend(transport)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported device type")
+	assert.True(t, transport.closed)
+}
+
+func TestVerifyDeviceReservedZonedModel(t *testing.T) {
+	zones := makeTestZones(2, 524288)
+	transport := newMockTransport(zones)
+	transport.pdt = 0x00        // standard disk
+	transport.zonedModel = 0x03 // reserved
+	_, err := newSMRBackend(transport)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported zoned model")
+	assert.True(t, transport.closed)
+}
+
 func TestSMRBackendDiscoverNoZones(t *testing.T) {
 	transport := newMockTransport(nil)
-	// Override to return empty response
-	transport.scsiReadFn = func(_ []byte, buf []byte) error {
-		binary.BigEndian.PutUint32(buf[0:4], 0) // no zones
+	// Override to handle INQUIRY normally but return empty REPORT ZONES
+	transport.scsiReadFn = func(cdb []byte, buf []byte) error {
+		if cdb[0] == zbc.OpcodeInquiry {
+			return transport.handleInquiry(cdb, buf)
+		}
+		// REPORT ZONES: no zones
+		binary.BigEndian.PutUint32(buf[0:4], 0)
 		return nil
 	}
 
