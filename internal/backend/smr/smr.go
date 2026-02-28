@@ -2,7 +2,6 @@ package smr
 
 import (
 	"fmt"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -80,9 +79,7 @@ func (s *SMRBackend) verifyDevice() error {
 		// Host-Managed confirmed via VPD
 		return nil
 	case 0x01:
-		// Host-Aware — warn but allow
-		slog.Warn("device reports Host-Aware zoning; sequential write constraints are advisory, not mandatory")
-		return nil
+		return fmt.Errorf("Host-Aware zoned device is not supported; sequential write constraints are advisory, not mandatory")
 	case 0x00:
 		return fmt.Errorf("device is not a zoned block device (VPD B1 zoned=0)")
 	default:

@@ -296,14 +296,15 @@ func TestVerifyDeviceVPDHostManaged(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestVerifyDeviceHostAwareWarns(t *testing.T) {
+func TestVerifyDeviceHostAwareRejected(t *testing.T) {
 	zones := makeTestZones(2, 524288)
 	transport := newMockTransport(zones)
 	transport.pdt = 0x00        // standard disk
 	transport.zonedModel = 0x01 // Host-Aware
-	// Should succeed (with warning logged)
 	_, err := newSMRBackend(transport)
-	require.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Host-Aware")
+	assert.True(t, transport.closed)
 }
 
 func TestVerifyDeviceNonZoned(t *testing.T) {
