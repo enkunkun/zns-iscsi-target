@@ -17,6 +17,19 @@ iSCSI Initiator (Windows / Linux / macOS)
    Host-Managed SMR HDD
 ```
 
+## Linux での既存の代替手段
+
+Linux カーネルには Host-Managed SMR/ZNS デバイスを扱う仕組みが既にある。Linux だけで完結するなら、以下の組み合わせで本プロジェクトと同等のことが実現できる。
+
+| 手段 | 概要 | コマンド例 |
+|------|------|-----------|
+| **btrfs + targetcli** | btrfs は Host-Managed SMR を直接サポートする。targetcli で iSCSI ターゲットとして公開すれば、Windows から通常のディスクとして接続可能 | `mkfs.btrfs /dev/sdX && targetcli` |
+| **dm-zoned** | Device Mapper レイヤーで SMR デバイスを通常のブロックデバイスに変換する。変換後のデバイスを LIO/targetcli で公開できる | `dmzadm --format /dev/sdX && dmzadm --start /dev/sdX` |
+| **zonefs** | ゾーンごとに1ファイルとして見せるファイルシステム。直接的な代替ではないが、ゾーンの可視化やデバッグに有用 | `mkzonefs /dev/sdX && mount -t zonefs /dev/sdX /mnt` |
+| **f2fs** | Host-Managed SMR 対応の FTL 内蔵ファイルシステム | `mkfs.f2fs /dev/sdX` |
+
+**本プロジェクトの存在意義**: 上記はすべて Linux カーネルの ZBC/ZAC サポートに依存する。Windows には同等の仕組みがなく、SMR HDD を直接活用する手段がない。本ツールは Windows SPTI を介して SMR HDD に直接アクセスし、OS に依存せず iSCSI ターゲットを提供する。
+
 ## クイックスタート
 
 ```bash
