@@ -2,6 +2,8 @@
 
 SATA SMR (Shingled Magnetic Recording) Host-Managed HDD を、iSCSI 経由で通常のブロックデバイスとして利用可能にするターゲットサーバ。Zone Translation Layer (ZTL) がシーケンシャル書き込み制約を透過的に処理する。
 
+> **Experimental** — このプロジェクトは Vibe-Coding による実験的な実装です。本番環境での運用は想定していません。データの整合性や耐障害性は保証されないため、重要なデータの保存には使用しないでください。
+
 ## 構成
 
 ```
