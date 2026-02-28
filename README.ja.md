@@ -138,4 +138,4 @@ GOOS=windows GOARCH=amd64 go build ./cmd/zns-iscsi
 
 ## ライセンス
 
-TBD
+[MIT](LICENSE)
