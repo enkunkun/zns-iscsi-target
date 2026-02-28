@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,6 +38,9 @@ type ServerConfig struct {
 	Config *config.Config
 	// Handler config (optional deps).
 	HandlerConfig HandlerConfig
+	// WebDir is the path to a directory containing the built React app.
+	// If set and the directory exists, it takes priority over the embedded FS.
+	WebDir string
 	// PrometheusRegisterer allows injecting a custom registry (useful in tests).
 	// If nil, prometheus.DefaultRegisterer is used.
 	PrometheusRegisterer prometheus.Registerer
@@ -72,13 +76,22 @@ func New(cfg ServerConfig) *Server {
 		promhttp.HandlerOpts{},
 	))
 
-	// Serve embedded React app (or placeholder)
-	webContent, err := fs.Sub(embeddedWebFS, "web")
-	if err != nil {
-		// Fallback: serve nothing if embed fails (shouldn't happen)
-		r.Handle("/*", http.NotFoundHandler())
+	// Serve React app: prefer runtime WebDir, fall back to embedded FS
+	var webFS http.FileSystem
+	if cfg.WebDir != "" {
+		if info, err := os.Stat(cfg.WebDir); err == nil && info.IsDir() {
+			webFS = http.Dir(cfg.WebDir)
+		}
+	}
+	if webFS == nil {
+		if sub, err := fs.Sub(embeddedWebFS, "web"); err == nil {
+			webFS = http.FS(sub)
+		}
+	}
+	if webFS != nil {
+		r.Handle("/*", http.FileServer(webFS))
 	} else {
-		r.Handle("/*", http.FileServer(http.FS(webContent)))
+		r.Handle("/*", http.NotFoundHandler())
 	}
 
 	listenAddr := cfg.ListenAddr

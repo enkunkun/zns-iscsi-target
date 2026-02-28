@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/enkunkun/zns-iscsi-target/internal/api"
@@ -117,6 +115,7 @@ func main() {
 		ListenAddr: cfg.API.Listen,
 		ZTL:        z,
 		Config:     cfg,
+		WebDir:     "/var/lib/zns-iscsi/web",
 		HandlerConfig: api.HandlerConfig{
 			ISCSI:   iscsiStats,
 			Journal: journalStats,
@@ -145,7 +144,7 @@ func main() {
 
 	// 12. Wait for SIGTERM/SIGINT or server error
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	notifySignals(sigCh)
 
 	select {
 	case sig := <-sigCh:

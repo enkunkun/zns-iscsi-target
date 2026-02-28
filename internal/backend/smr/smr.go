@@ -1,10 +1,7 @@
-//go:build linux
-
 package smr
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 
@@ -12,41 +9,32 @@ import (
 	"github.com/enkunkun/zns-iscsi-target/pkg/zbc"
 )
 
-// SMRBackend is a ZonedDevice implementation for SATA SMR drives via SG_IO.
+// SMRBackend is a ZonedDevice implementation for SATA SMR drives.
+// It sends SCSI CDBs through a platform-specific ScsiTransport.
 type SMRBackend struct {
 	mu           sync.Mutex
-	fd           int
-	file         *os.File
+	transport    ScsiTransport
 	zoneCount    atomic.Int32
 	zoneSectors  atomic.Uint64
 	maxOpenZones atomic.Int32
 	capacity     atomic.Uint64
 }
 
-// Open opens a SATA SMR device at the given path and returns an SMRBackend.
-func Open(devicePath string) (*SMRBackend, error) {
-	f, err := os.OpenFile(devicePath, os.O_RDWR, 0)
-	if err != nil {
-		return nil, fmt.Errorf("opening SMR device %q: %w", devicePath, err)
-	}
+// newSMRBackend creates an SMRBackend using the given transport and discovers zone geometry.
+func newSMRBackend(transport ScsiTransport) (*SMRBackend, error) {
+	s := &SMRBackend{transport: transport}
 
-	smr := &SMRBackend{
-		fd:   int(f.Fd()),
-		file: f,
-	}
-
-	// Discover zone information from device
-	if err := smr.discover(); err != nil {
-		f.Close()
+	if err := s.discover(); err != nil {
+		transport.Close()
 		return nil, err
 	}
 
-	return smr, nil
+	return s, nil
 }
 
 // discover queries the device for zone information.
 func (s *SMRBackend) discover() error {
-	zones, err := reportZones(s.fd, 0, 1)
+	zones, err := s.reportZones(0, 1)
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
 	}
@@ -58,7 +46,7 @@ func (s *SMRBackend) discover() error {
 	s.zoneSectors.Store(zones[0].ZoneLength)
 
 	// Get all zones to determine total zone count
-	allZones, err := reportZones(s.fd, 0, 65536)
+	allZones, err := s.reportZones(0, 65536)
 	if err != nil {
 		return fmt.Errorf("discover all zones: %w", err)
 	}
@@ -69,9 +57,37 @@ func (s *SMRBackend) discover() error {
 	s.capacity.Store(totalSectors)
 
 	// SMR drives typically support 14 open zones (ZAC requirement)
-	// This can be overridden; for now use a conservative default.
 	s.maxOpenZones.Store(14)
 
+	return nil
+}
+
+// reportZones issues a REPORT ZONES command and returns the zone descriptors.
+func (s *SMRBackend) reportZones(startLBA uint64, maxZones int) ([]zbc.ZoneDescriptor, error) {
+	const headerSize = zbc.ReportZonesHeaderSize
+	const descSize = zbc.ZoneDescriptorSize
+
+	allocLen := uint32(headerSize + maxZones*descSize)
+	if allocLen > reportZonesMaxLen {
+		allocLen = reportZonesMaxLen
+	}
+
+	buf := make([]byte, allocLen)
+	cdb := buildReportZonesCDB(startLBA, allocLen, zbc.ReportingAll)
+
+	if err := s.transport.ScsiRead(cdb, buf, defaultTimeout); err != nil {
+		return nil, fmt.Errorf("REPORT ZONES: %w", err)
+	}
+
+	return parseReportZonesResponse(buf)
+}
+
+// zoneAction issues a ZONE ACTION command.
+func (s *SMRBackend) zoneAction(action uint8, startLBA uint64, all bool) error {
+	cdb := buildZoneActionCDB(action, startLBA, all)
+	if err := s.transport.ScsiNoData(cdb, defaultTimeout); err != nil {
+		return fmt.Errorf("ZONE ACTION 0x%02x: %w", action, err)
+	}
 	return nil
 }
 
@@ -84,7 +100,7 @@ func (s *SMRBackend) ReportZones(startLBA uint64, count int) ([]zbc.ZoneDescript
 	if maxZones <= 0 {
 		maxZones = int(s.zoneCount.Load())
 	}
-	return reportZones(s.fd, startLBA, maxZones)
+	return s.reportZones(startLBA, maxZones)
 }
 
 // ZoneCount returns the total number of zones.
@@ -101,28 +117,28 @@ func (s *SMRBackend) ZoneSize() uint64 {
 func (s *SMRBackend) OpenZone(zoneStartLBA uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return zoneAction(s.fd, zbc.ZoneActionOpen, zoneStartLBA, false)
+	return s.zoneAction(zbc.ZoneActionOpen, zoneStartLBA, false)
 }
 
 // CloseZone sends a CLOSE ZONE command.
 func (s *SMRBackend) CloseZone(zoneStartLBA uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return zoneAction(s.fd, zbc.ZoneActionClose, zoneStartLBA, false)
+	return s.zoneAction(zbc.ZoneActionClose, zoneStartLBA, false)
 }
 
 // FinishZone sends a FINISH ZONE command.
 func (s *SMRBackend) FinishZone(zoneStartLBA uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return zoneAction(s.fd, zbc.ZoneActionFinish, zoneStartLBA, false)
+	return s.zoneAction(zbc.ZoneActionFinish, zoneStartLBA, false)
 }
 
 // ResetZone sends a RESET WRITE POINTER command.
 func (s *SMRBackend) ResetZone(zoneStartLBA uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return zoneAction(s.fd, zbc.ZoneActionReset, zoneStartLBA, false)
+	return s.zoneAction(zbc.ZoneActionReset, zoneStartLBA, false)
 }
 
 // ReadSectors reads sectors from the device using SCSI READ(16).
@@ -132,7 +148,7 @@ func (s *SMRBackend) ReadSectors(lba uint64, count uint32) ([]byte, error) {
 	cdb := buildRead16CDB(lba, count)
 
 	s.mu.Lock()
-	err := sgRead(s.fd, cdb, buf, defaultTimeout)
+	err := s.transport.ScsiRead(cdb, buf, defaultTimeout)
 	s.mu.Unlock()
 
 	if err != nil {
@@ -152,7 +168,7 @@ func (s *SMRBackend) WriteSectors(lba uint64, data []byte) error {
 	cdb := buildWrite16CDB(lba, count)
 
 	s.mu.Lock()
-	err := sgWrite(s.fd, cdb, data, defaultTimeout)
+	err := s.transport.ScsiWrite(cdb, data, defaultTimeout)
 	s.mu.Unlock()
 
 	if err != nil {
@@ -176,7 +192,7 @@ func (s *SMRBackend) MaxOpenZones() int {
 	return int(s.maxOpenZones.Load())
 }
 
-// Close closes the device file descriptor.
+// Close closes the underlying transport.
 func (s *SMRBackend) Close() error {
-	return s.file.Close()
+	return s.transport.Close()
 }

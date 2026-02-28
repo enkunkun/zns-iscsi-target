@@ -1,4 +1,4 @@
-.PHONY: all build test test-race lint clean
+.PHONY: all build build-windows test test-race lint clean
 
 BINARY := zns-iscsi
 CMD     := ./cmd/zns-iscsi
@@ -7,6 +7,9 @@ all: build
 
 build:
 	go build -o bin/$(BINARY) $(CMD)
+
+build-windows:
+	GOOS=windows GOARCH=amd64 go build -o bin/$(BINARY).exe $(CMD)
 
 test:
 	go test ./...

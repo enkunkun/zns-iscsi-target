@@ -21,10 +21,12 @@ target:
 
 # Device backend settings
 device:
-  # Backend type: "emulator" (in-memory) or "smr" (physical SMR/ZNS drive, Linux only).
+  # Backend type: "emulator" (in-memory) or "smr" (physical SMR/ZNS drive).
   backend: emulator
 
   # Path to the SMR/ZNS block device. Required only when backend is "smr".
+  # Linux:   /dev/sdb
+  # Windows: \\.\PhysicalDrive1  (requires Administrator privileges)
   # path: /dev/sdb
 
   # In-memory emulator settings (used when backend is "emulator").

@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package main
 
@@ -10,5 +10,5 @@ import (
 
 // openSMRBackend is not supported on non-Linux platforms.
 func openSMRBackend(_ string) (backend.ZonedDevice, error) {
-	return nil, fmt.Errorf("SMR backend is only supported on Linux")
+	return nil, fmt.Errorf("SMR backend is only supported on Linux and Windows")
 }

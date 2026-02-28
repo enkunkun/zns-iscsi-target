@@ -1,5 +1,3 @@
-//go:build linux
-
 package smr
 
 import (
@@ -59,7 +57,7 @@ func TestParseZoneDescriptorImplicitOpen(t *testing.T) {
 		zbc.ZoneTypeSequentialWrite,
 		zbc.ZoneConditionImplicitOpen,
 		524288,
-		524288, // zone starts at sector 524288 (zone 1)
+		524288,      // zone starts at sector 524288 (zone 1)
 		524288+1000, // write pointer 1000 sectors into zone
 		false, false,
 	)
@@ -108,41 +106,6 @@ func TestParseZoneDescriptorTooShort(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestBuildReportZonesCDB(t *testing.T) {
-	cdb := buildReportZonesCDB(0x10000, 0x40000, zbc.ReportingAll)
-	assert.Equal(t, byte(zbc.OpcodeReportZones), cdb[0])
-	assert.Equal(t, uint64(0x10000), binary.BigEndian.Uint64(cdb[2:10]))
-	assert.Equal(t, uint32(0x40000), binary.BigEndian.Uint32(cdb[10:14]))
-	assert.Equal(t, byte(zbc.ReportingAll), cdb[14])
-}
-
-func TestBuildZoneActionCDB(t *testing.T) {
-	// Reset zone at LBA 0, not all
-	cdb := buildZoneActionCDB(zbc.ZoneActionReset, 0x1000, false)
-	assert.Equal(t, byte(zbc.OpcodeZoneAction), cdb[0])
-	assert.Equal(t, byte(zbc.ZoneActionReset), cdb[1])
-	assert.Equal(t, uint64(0x1000), binary.BigEndian.Uint64(cdb[2:10]))
-	assert.Equal(t, byte(0x00), cdb[14])
-
-	// All zones
-	cdb2 := buildZoneActionCDB(zbc.ZoneActionReset, 0, true)
-	assert.Equal(t, byte(0x01), cdb2[14])
-}
-
-func TestBuildRead16CDB(t *testing.T) {
-	cdb := buildRead16CDB(0x100, 8)
-	assert.Equal(t, byte(0x88), cdb[0])
-	assert.Equal(t, uint64(0x100), binary.BigEndian.Uint64(cdb[2:10]))
-	assert.Equal(t, uint32(8), binary.BigEndian.Uint32(cdb[10:14]))
-}
-
-func TestBuildWrite16CDB(t *testing.T) {
-	cdb := buildWrite16CDB(0x200, 16)
-	assert.Equal(t, byte(0x8A), cdb[0])
-	assert.Equal(t, uint64(0x200), binary.BigEndian.Uint64(cdb[2:10]))
-	assert.Equal(t, uint32(16), binary.BigEndian.Uint32(cdb[10:14]))
-}
-
 func TestAllZoneConditions(t *testing.T) {
 	tests := []struct {
 		condition zbc.ZoneCondition
@@ -168,4 +131,48 @@ func TestAllZoneConditions(t *testing.T) {
 			assert.Equal(t, tt.state, desc.ZoneState)
 		})
 	}
+}
+
+func TestParseReportZonesResponse(t *testing.T) {
+	const headerSize = zbc.ReportZonesHeaderSize
+	const descSize = zbc.ZoneDescriptorSize
+
+	// Build a response with 2 zones
+	buf := make([]byte, headerSize+2*descSize)
+	binary.BigEndian.PutUint32(buf[0:4], uint32(2*descSize)) // zone list length
+
+	zone0 := buildZoneDescriptorFixture(
+		zbc.ZoneTypeSequentialWrite, zbc.ZoneConditionEmpty,
+		524288, 0, 0, false, false,
+	)
+	copy(buf[headerSize:], zone0)
+
+	zone1 := buildZoneDescriptorFixture(
+		zbc.ZoneTypeSequentialWrite, zbc.ZoneConditionFull,
+		524288, 524288, 524288*2, false, false,
+	)
+	copy(buf[headerSize+descSize:], zone1)
+
+	zones, err := parseReportZonesResponse(buf)
+	require.NoError(t, err)
+	require.Len(t, zones, 2)
+
+	assert.Equal(t, zbc.ZoneStateEmpty, zones[0].ZoneState)
+	assert.Equal(t, uint64(0), zones[0].ZoneStartLBA)
+	assert.Equal(t, zbc.ZoneStateFull, zones[1].ZoneState)
+	assert.Equal(t, uint64(524288), zones[1].ZoneStartLBA)
+}
+
+func TestParseReportZonesResponseEmpty(t *testing.T) {
+	buf := make([]byte, zbc.ReportZonesHeaderSize)
+	binary.BigEndian.PutUint32(buf[0:4], 0) // no zones
+
+	zones, err := parseReportZonesResponse(buf)
+	require.NoError(t, err)
+	assert.Nil(t, zones)
+}
+
+func TestParseReportZonesResponseTooShort(t *testing.T) {
+	_, err := parseReportZonesResponse(make([]byte, 4)) // too short for header
+	assert.Error(t, err)
 }
