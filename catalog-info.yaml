@@ -1,0 +1,12 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: zns-iscsi-target
+  description: Experimental ZNS/SMR iSCSI Target
+  annotations:
+    github.com/project-slug: enkunkun/zns-iscsi-target
+spec:
+  type: service
+  lifecycle: experimental
+  owner: user:default/guest
+  system: research
